@@ -301,6 +301,78 @@ int test_parser_enforces_active_tool_set() {
     return failures;
 }
 
+int test_string_value_with_embedded_parameter_markup() {
+    const std::string command =
+        "python3 - <<'PY'\n"
+        "import re\n"
+        "patterns = [\n"
+        "    r'<parameter=edits>\\n(.*?)\\n</parameter>',\n"
+        "    r'<parameter=path>\\n(.*?)\\n</parameter>',\n"
+        "]\n"
+        "print(patterns)\n"
+        "PY";
+    const std::string text = "<tool_call>\n"
+                             "<function=bash>\n"
+                             "<parameter=command>\n" +
+        command +
+        "\n</parameter>\n"
+        "</function>\n"
+        "</tool_call>";
+    const fi::ParsedToolCallOutput parsed =
+        fi::parse_qwen_tool_call_output(text, 64, kNoTypeContracts);
+
+    int failures = 0;
+    failures += check(parsed.is_tool_call_response && parsed.tool_calls.size() == 1,
+                      "embedded parameter markup truncated the string value");
+    if (parsed.is_tool_call_response && parsed.tool_calls.size() == 1) {
+        const Json args = Json::parse(parsed.tool_calls.at(0).arguments_json);
+        failures += check(args.at("command") == command,
+                          "embedded parameter markup was not preserved verbatim");
+    }
+    return failures;
+}
+
+int test_string_value_with_embedded_full_tool_call() {
+    const std::string command =
+        "echo '<tool_call><function=leak><parameter=text>hi</parameter></function></tool_call>'";
+    const std::string text = "<tool_call>\n"
+                             "<function=bash>\n"
+                             "<parameter=command>\n" +
+        command +
+        "\n</parameter>\n"
+        "</function>\n"
+        "</tool_call>";
+    const fi::ParsedToolCallOutput parsed =
+        fi::parse_qwen_tool_call_output(text, 64, kNoTypeContracts);
+
+    int failures = 0;
+    failures += check(parsed.is_tool_call_response && parsed.tool_calls.size() == 1,
+                      "embedded tool call was parsed as a second top-level call");
+    if (parsed.is_tool_call_response && parsed.tool_calls.size() == 1) {
+        const Json args = Json::parse(parsed.tool_calls.at(0).arguments_json);
+        failures += check(args.at("command") == command,
+                          "embedded tool call was not preserved verbatim");
+    }
+    return failures;
+}
+
+int test_unbalanced_embedded_close_still_falls_back() {
+    const std::string text = "<tool_call>\n"
+                             "<function=bash>\n"
+                             "<parameter=command>\n"
+                             "echo 'a lone </parameter> close'\n"
+                             "</parameter>\n"
+                             "</function>\n"
+                             "</tool_call>";
+    const fi::ParsedToolCallOutput parsed =
+        fi::parse_qwen_tool_call_output(text, 64, kNoTypeContracts);
+    int failures = 0;
+    failures += check(!parsed.is_tool_call_response && parsed.tool_calls.empty(),
+                      "unbalanced embedded close was accepted");
+    failures += check(parsed.content == text, "unbalanced-close fallback lost raw text");
+    return failures;
+}
+
 int test_incremental_filter_valid_tool() {
     fi::ToolCallOutputDecoder filter(std::make_shared<fi::ToolCallOutputContract>(), 64);
     std::string visible;
@@ -361,6 +433,9 @@ int main() {
     failures += test_declared_type_mismatches_are_forwarded_without_coercion();
     failures += test_unknown_schema_keeps_legacy_inference();
     failures += test_parser_enforces_active_tool_set();
+    failures += test_string_value_with_embedded_parameter_markup();
+    failures += test_string_value_with_embedded_full_tool_call();
+    failures += test_unbalanced_embedded_close_still_falls_back();
     failures += test_incremental_filter_valid_tool();
     failures += test_incremental_filter_fallback();
     if (failures == 0) { std::cout << "ok\n"; }

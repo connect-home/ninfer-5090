@@ -176,6 +176,29 @@ Json parse_json_parameter_value(std::string_view value) {
     return Json(Json::value_t::discarded);
 }
 
+std::size_t find_matching_close(std::string_view text, std::size_t scan_from,
+                                std::string_view open_tag, std::string_view close_tag) {
+    // Qwen tool-call values are textual and may contain balanced copies of the
+    // delimiter markup. Match the close tag at the same nesting depth instead
+    // of terminating at the first close tag inside a string value.
+    std::size_t depth = 1;
+    std::size_t scan  = scan_from;
+    while (scan <= text.size()) {
+        const std::size_t next_open  = text.find(open_tag, scan);
+        const std::size_t next_close = text.find(close_tag, scan);
+        if (next_close == std::string_view::npos) { return std::string_view::npos; }
+        if (next_open != std::string_view::npos && next_open < next_close) {
+            ++depth;
+            scan = next_open + open_tag.size();
+        } else {
+            --depth;
+            if (depth == 0) { return next_close; }
+            scan = next_close + close_tag.size();
+        }
+    }
+    return std::string_view::npos;
+}
+
 bool parse_parameter(std::string_view inner, std::size_t& pos, Json& args,
                      std::string_view tool_name, const ToolArgumentTypeContracts& contracts) {
     constexpr std::string_view kParamOpen  = "<parameter=";
@@ -186,7 +209,7 @@ bool parse_parameter(std::string_view inner, std::size_t& pos, Json& args,
     if (name_end == std::string_view::npos || name_end == name_begin) { return false; }
     const std::string key       = std::string(inner.substr(name_begin, name_end - name_begin));
     pos                         = name_end + 1;
-    const std::size_t value_end = inner.find(kParamClose, pos);
+    const std::size_t value_end = find_matching_close(inner, pos, kParamOpen, kParamClose);
     if (value_end == std::string_view::npos) { return false; }
     const std::string_view encoded_value = inner.substr(pos, value_end - pos);
     const ToolArgumentTypeContracts::Parameter* contract =
@@ -225,7 +248,8 @@ bool parse_one_tool_call(std::string_view block, std::size_t max_name_length,
     }
     pos = name_end + 1;
 
-    const std::size_t function_end = block.find(kFunctionClose, pos);
+    const std::size_t function_end =
+        find_matching_close(block, pos, kFunctionOpen, kFunctionClose);
     if (function_end == std::string_view::npos) { return false; }
     const std::string_view params = block.substr(pos, function_end - pos);
     Json args                     = Json::object();
@@ -286,7 +310,8 @@ ParsedToolCallOutput parse_qwen_tool_call_output(const std::string& text,
         if (pos >= text.size()) { break; }
         if (!starts_with_at(text, pos, kToolOpen)) { return fallback(text); }
         const std::size_t inner_begin = pos + kToolOpen.size();
-        const std::size_t close       = text.find(kToolClose, inner_begin);
+        const std::size_t close =
+            find_matching_close(text, inner_begin, kToolOpen, kToolClose);
         if (close == std::string::npos) { return fallback(text); }
         GeneratedToolCall call;
         if (!parse_one_tool_call(std::string_view(text).substr(inner_begin, close - inner_begin),
