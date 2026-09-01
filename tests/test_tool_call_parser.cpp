@@ -385,6 +385,29 @@ int test_deeply_nested_embedded_markup() {
     return failures;
 }
 
+int test_unbalanced_embedded_open_preserves_legacy_string() {
+    const std::string command = "echo 'mentions <tool_call> as documentation'";
+    const std::string text = "<tool_call>\n"
+                             "<function=bash>\n"
+                             "<parameter=command>\n" +
+        command +
+        "\n</parameter>\n"
+        "</function>\n"
+        "</tool_call>";
+    const fi::ParsedToolCallOutput parsed =
+        fi::parse_qwen_tool_call_output(text, 64, kNoTypeContracts);
+
+    int failures = 0;
+    failures += check(parsed.is_tool_call_response && parsed.tool_calls.size() == 1,
+                      "unbalanced prose marker rejected an otherwise valid call");
+    if (parsed.is_tool_call_response && parsed.tool_calls.size() == 1) {
+        const Json args = Json::parse(parsed.tool_calls.at(0).arguments_json);
+        failures += check(args.at("command") == command,
+                          "legacy fallback did not preserve prose marker verbatim");
+    }
+    return failures;
+}
+
 int test_unbalanced_embedded_close_still_falls_back() {
     const std::string text = "<tool_call>\n"
                              "<function=bash>\n"
@@ -465,6 +488,7 @@ int main() {
     failures += test_string_value_with_embedded_parameter_markup();
     failures += test_string_value_with_embedded_full_tool_call();
     failures += test_deeply_nested_embedded_markup();
+    failures += test_unbalanced_embedded_open_preserves_legacy_string();
     failures += test_unbalanced_embedded_close_still_falls_back();
     failures += test_incremental_filter_valid_tool();
     failures += test_incremental_filter_fallback();

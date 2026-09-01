@@ -186,7 +186,7 @@ std::size_t find_matching_close(std::string_view text, std::size_t scan_from,
     while (scan <= text.size()) {
         const std::size_t next_open  = text.find(open_tag, scan);
         const std::size_t next_close = text.find(close_tag, scan);
-        if (next_close == std::string_view::npos) { return std::string_view::npos; }
+        if (next_close == std::string_view::npos) { break; }
         if (next_open != std::string_view::npos && next_open < next_close) {
             ++depth;
             scan = next_open + open_tag.size();
@@ -196,7 +196,12 @@ std::size_t find_matching_close(std::string_view text, std::size_t scan_from,
             scan = next_close + close_tag.size();
         }
     }
-    return std::string_view::npos;
+
+    // A complete nested region is unambiguous and was handled above. If an
+    // opening token was merely mentioned as text and never balanced, retain
+    // the legacy first-close interpretation so ordinary strings such as
+    // documentation, regexes, and shell commands remain callable.
+    return text.find(close_tag, scan_from);
 }
 
 bool parse_parameter(std::string_view inner, std::size_t& pos, Json& args,
